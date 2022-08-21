@@ -1,4 +1,9 @@
 
+from ast import pattern
+from msilib import type_key
+import re
+from xml.etree.ElementTree import Comment
+
 definition_keywords = [
     'CON', # constant
     'VAR', # variable (register?)
@@ -75,7 +80,6 @@ access_keywords += [ 'NIB{}'.format(i) for i in range(1, 5) ]
 access_keywords += [ 'BYTE{}'.format(i) for i in range(1, 3) ]
 
 debug_format_keywords = [
-    '?', # sends "symbol = x"
     'REP', # repeat byte x times, e.g. REP "A"\5 sends "AAAAA"
     'ASC', # Changes ? to display "symbol = 'x'", converting x to an ascii character
     'STR', # sends byte array as string, can be limited, e.g. STR array\5 sends 5 characters from the array
@@ -133,13 +137,8 @@ keywords = list(set(
     debug_literal_keywords
 ))
 
-control_operators = [
-    '(',
-    ')',
-    ',', # hack?'
-]
-
 unary_operators = [
+    '?', # debug format, sends "symbol = x"
     '-', # negative
     '~', # not
     'SQR', # Square root unary operator
@@ -148,10 +147,16 @@ unary_operators = [
     'COS', #
     'DCD', # set bit #
     'NCD', # get highest bit # + 1
+    'NOT',
 ]
 
 binary_operators = [
     '=',
+    '>',
+    '<',
+    '<>',
+    '<=',
+    '>=',
     '+',
     '-',
     '*',
@@ -173,127 +178,172 @@ binary_operators = [
     'MAX',
     'DIG', # digit of number?
     'REV', # reverse bits???
-]
-
-comparison_operators = [
-    '=',
-    '>',
-    '<',
-    '<>',
-    '<=',
-    '>=',
-]
-
-boolean_operators = [
-    'NOT',
     'AND',
     'OR',
     'XOR',
 ]
 
 operators = list(set(
-    control_operators +
     unary_operators +
     binary_operators +
-    comparison_operators +
-    boolean_operators
 ))
 
 class Token:
-    pass
+    @classmethod
+    def match(cls, string):
+        return False
+
+class NewlineToken(Token):
+
+    pattern = re.compile(r'^\s*\n')
+
+    def __repr__(self):
+        return '<NewlineToken>'
+
+    @classmethod
+    def match(cls, string):
+        match = cls.pattern.match(string)
+        if match:
+            return NewlineToken()
+
+class CommentToken(Token):
+    def __init__(self, comment):
+        self.comment = comment
+
+    def __repr__(self):
+        return '<CommentToken comment="{}" >'.format(self.comment)
+
+    pattern = re.compile(r'^\s*\'(.*)')
+
+    @classmethod
+    def match(cls, string):
+        match = cls.pattern.match(string)
+        if match:
+            return CommentToken(match[0])
 
 class KeywordToken(Token):
-
     def __init__(self, keyword):
         self.keyword = keyword
 
+    def is_definition(self):
+        return self.keyword in definition_keywords
+
+    def is_io(self):
+        return self.keyword in io_keywords
+
+    def is_control(self):
+        return self.keyword in control_keywords
+
+    def is_type(self):
+        return self.keyword in type_keywords
+
+    def is_access(self):
+        return self.keyword in access_keywords
+
+    def is_debug_format(self):
+        return self.keyword in debug_format_keywords
+
+    def is_debug_literal(self):
+        return self.keyword in debug_literal_keywords
+
     def __repr__(self):
-        return '<KeywordToken {} >'.format(self.keyword)
+        return '<KeywordToken keyword={} >'.format(self.keyword)
+
+    pattern = re.compile(r'^\s*([_a-zA-Z])')
 
     @classmethod
-    def parse(cls, string):
-        string = string.upper()
-
-        if string in keywords:
-            return KeywordToken(string)
-            
-        return None
-
-class OperatorToken(Token):
-    
-    def __init__(self, operator):
-        self.operator = operator
-
-    def __repr__(self):
-        return '<OperatorToken {} >'.format(self.operator)
-
-    @classmethod
-    def parse(cls, string):
-        string = string.upper()
-
-        if string in operators:
-            return OperatorToken(string)
-
-        return None
+    def match(cls, string):
+        match = cls.pattern.match(string)
+        if match:
+            upper = match[0].upper()
+            if upper in keywords:
+                return KeywordToken(upper)
 
 class NameToken(Token):
-    
     def __init__(self, name):
-        self.name = name
+        parts = name.split('.', 1)
+        self.name = parts[0]
+
+        self.suffix = ''
+        if len(parts) > 1:
+            self.suffix = parts[1]
+
+    pattern = re.compile(r'^\s*([_a-zA-Z][\._a-zA-Z0-9]*)')
 
     def __repr__(self):
-        return '<NameToken {} >'.format(self.name)
+        return '<NameToken name={} >'.format(self.name)
 
     @classmethod
-    def parse(cls, string):
-        if len(string) >= 1 and len(string) <= 32:
-            if string[0].isalpha() or string[0] == '_':
-                return NameToken(string)
+    def match(cls, string):
+        match = cls.pattern.match(string)
+        if match:
+            if match[0] in keywords:
+                # TODO: 32 character limit
+                return NameToken(match[0])
 
-        return None
-
-class LiteralToken(Token):
+# HERE
+class StringLiteralToken(Token):
     
     def __init__(self, value):
         self.value = value
 
     def __repr__(self):
-        return '<LiteralToken type={} {} >'.format(type(self.value), self.value)
+        return '<StringLiteralToken {} >'.format(self.value)
 
     @classmethod
     def parse(cls, string):
 
-        if len(string) >= 3:
+        if len(string) >= 2:
             if string[0] == '"' and string[-1] == '"':
                 bytes = string[1:len(string) - 1].encode('ascii')
-                return LiteralToken(bytes)
-
-        if len(string) > 0:
-            if string[0] == '$':
-                return LiteralToken(int(string[1:], 16))
-            elif string[0] == '%':
-                return LiteralToken(int(string[1:], 2))
-            else:
-                return LiteralToken(int(string, 10))
+                return StringLiteralToken(bytes)
 
         return None
 
-def parse_token(string):
-    token = OperatorToken.parse(string)
-    if token:
-        return token
-        
-    token = KeywordToken.parse(string)
-    if token:
-        return token
-        
-    token = NameToken.parse(string)
-    if token:
-        return token
-        
-    token = LiteralToken.parse(string)
-    if token:
-        return token
+class NumericLiteralToken(Token):
     
-    print("Failed to parse token '{}'".format(string))
-    return None
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self):
+        return '<NumericLiteralToken {} >'.format(self.value)
+
+    @classmethod
+    def parse(cls, string):
+
+        if len(string) > 0:
+            if string[0] == '$':
+                return NumericLiteralToken(int(string[1:], 16))
+            elif string[0] == '%':
+                return NumericLiteralToken(int(string[1:], 2))
+            else:
+                return NumericLiteralToken(int(string, 10))
+
+        return None
+
+class OperatorToken(Token):
+    def __init__(self, operator):
+        self.operator = operator
+    
+    def is_assignment(self):
+        return self.operator == '='
+
+    def is_debug_format(self):
+        return self.operator == '?'
+
+    def is_unary(self):
+        return self.operator in unary_operators
+
+    def is_binary(self):
+        return self.operator in binary_operators
+
+    def __repr__(self):
+        return '<OperatorToken operator="{}" >'.format(self.operator)
+
+    pattern = re.compile(r'^\s*(<>|<=|>=|<<|>>|\*\*|\*\/|\/\/|&\/|\|\/|\^\/|SQR|ABS|SIN|COS|DCD|NCD|AND|OR|XOR|[\?\-~=<>\+\-\*\/&\|\^])')
+
+    @classmethod
+    def match(cls, string):
+        match = cls.pattern.match(string)
+        if match:
+            return OperatorToken(match[0])
