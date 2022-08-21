@@ -43,7 +43,7 @@ io_keywords = [
 
 control_keywords = [
     'BRANCH',
-    'IF' 'THEN', 'ELSE', 'ENDIF',
+    'IF', 'THEN', 'ELSE', 'ENDIF',
     'GOTO', # jump
     'GOSUB', # call
     'ON', # used with goto/gosub, a lot like branch
@@ -185,7 +185,7 @@ binary_operators = [
 
 operators = list(set(
     unary_operators +
-    binary_operators +
+    binary_operators
 ))
 
 class Token:
@@ -202,9 +202,38 @@ class NewlineToken(Token):
 
     @classmethod
     def match(cls, string):
-        match = cls.pattern.match(string)
-        if match:
-            return NewlineToken()
+        result = cls.pattern.match(string)
+        if result:
+            return NewlineToken(), result.span()
+        return None, None
+
+class CommaToken(Token):
+
+    pattern = re.compile(r'^\s*,')
+
+    def __repr__(self):
+        return '<CommaToken>'
+
+    @classmethod
+    def match(cls, string):
+        result = cls.pattern.match(string)
+        if result:
+            return CommaToken(), result.span()
+        return None, None
+
+class ColonToken(Token):
+
+    pattern = re.compile(r'^\s*:')
+
+    def __repr__(self):
+        return '<ColonToken>'
+
+    @classmethod
+    def match(cls, string):
+        result = cls.pattern.match(string)
+        if result:
+            return ColonToken(), result.span()
+        return None, None
 
 class CommentToken(Token):
     def __init__(self, comment):
@@ -217,9 +246,11 @@ class CommentToken(Token):
 
     @classmethod
     def match(cls, string):
-        match = cls.pattern.match(string)
-        if match:
-            return CommentToken(match[0])
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1]
+            return CommentToken(match), result.span()
+        return None, None
 
 class KeywordToken(Token):
     def __init__(self, keyword):
@@ -249,15 +280,16 @@ class KeywordToken(Token):
     def __repr__(self):
         return '<KeywordToken keyword={} >'.format(self.keyword)
 
-    pattern = re.compile(r'^\s*([_a-zA-Z])')
+    pattern = re.compile(r'^\s*([a-zA-Z]+)')
 
     @classmethod
     def match(cls, string):
-        match = cls.pattern.match(string)
-        if match:
-            upper = match[0].upper()
-            if upper in keywords:
-                return KeywordToken(upper)
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1].upper()
+            if match in keywords:
+                return KeywordToken(match), result.span()
+        return None, None
 
 class NameToken(Token):
     def __init__(self, name):
@@ -275,30 +307,30 @@ class NameToken(Token):
 
     @classmethod
     def match(cls, string):
-        match = cls.pattern.match(string)
-        if match:
-            if match[0] in keywords:
-                # TODO: 32 character limit
-                return NameToken(match[0])
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1]
+            # TODO: 32 character limit
+            return NameToken(match), result.span()
+        return None, None
 
-# HERE
 class StringLiteralToken(Token):
     
     def __init__(self, value):
         self.value = value
 
     def __repr__(self):
-        return '<StringLiteralToken {} >'.format(self.value)
+        return '<StringLiteralToken value="{}" >'.format(self.value)
+
+    pattern = re.compile(r'^\s*(\".*\")')
 
     @classmethod
-    def parse(cls, string):
-
-        if len(string) >= 2:
-            if string[0] == '"' and string[-1] == '"':
-                bytes = string[1:len(string) - 1].encode('ascii')
-                return StringLiteralToken(bytes)
-
-        return None
+    def match(cls, string):
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1]
+            return StringLiteralToken(match), result.span()
+        return None, None
 
 class NumericLiteralToken(Token):
     
@@ -306,20 +338,27 @@ class NumericLiteralToken(Token):
         self.value = value
 
     def __repr__(self):
-        return '<NumericLiteralToken {} >'.format(self.value)
+        return '<NumericLiteralToken value:dec={:05d} value:hex=${:04X} value:bin=%{:016b} >'.format(self.value, self.value, self.value)
+
+    pattern = re.compile(r'^\s*([0-9]+|\$[0-9A-F]+|\%[0-1]+)')
 
     @classmethod
-    def parse(cls, string):
+    def match(cls, string):
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1]
 
-        if len(string) > 0:
-            if string[0] == '$':
-                return NumericLiteralToken(int(string[1:], 16))
-            elif string[0] == '%':
-                return NumericLiteralToken(int(string[1:], 2))
+            value = None
+            if match[0] == '$':
+                value = int(match[1:], 16)
+            elif match[0] == '%':
+                value = int(match[1:], 2)
             else:
-                return NumericLiteralToken(int(string, 10))
+                value = int(match, 10)
 
-        return None
+            if value:
+                return NumericLiteralToken(value), result.span()
+        return None, None
 
 class OperatorToken(Token):
     def __init__(self, operator):
@@ -344,6 +383,67 @@ class OperatorToken(Token):
 
     @classmethod
     def match(cls, string):
-        match = cls.pattern.match(string)
-        if match:
-            return OperatorToken(match[0])
+        result = cls.pattern.match(string)
+        if result:
+            match = result[1]
+            return OperatorToken(match[0]), result.span()
+        return None, None
+
+class TokenQueue(list):
+    """
+    FIFO queue of tokens to process
+    """
+
+    def __init__(self, tokens=list()):
+        self.tokens = tokens
+
+    def push(self, tokens):
+        if type(tokens) == list:
+            self.tokens = tokens + self.tokens
+        else:
+            self.tokens.insert(0, tokens)
+
+    def skip(self, amount):
+        if amount >= len(self.tokens):
+            self.tokens = []
+        else:
+            self.tokens = self.tokens[amount:]
+
+    def peek(self, offset = 0, count = 1):
+        if count == 1:
+            if offset >= len(self.tokens):
+                return None
+
+            return self.tokens[offset]
+        else:
+            if offset >= len(self.tokens):
+                return [ None ] * count
+
+            if offset + count >= len(self.tokens):
+                remaining = len(self.tokens) - (offset + count)
+                return self.tokens[offset:] + ([ None ] * remaining)
+
+            return self.tokens[offset:offset + count]
+
+    def pop(self, count = 1):
+        if count == 1:
+            if len(self.tokens) == 0:
+                return None
+
+            token = self.tokens[0]
+            self.tokens = self.tokens[1:]
+            return token
+        else:
+            if count >= len(self.tokens):
+                tokens = self.tokens[:count]
+                self.tokens = []
+                remaining = count - len(tokens)
+                return tokens + ([ None ] * remaining)
+
+            tokens = self.tokens[:count]
+            self.tokens = self.tokens[count:]
+            return tokens
+
+    def empty(self):
+        return len(self.tokens) == 0
+
