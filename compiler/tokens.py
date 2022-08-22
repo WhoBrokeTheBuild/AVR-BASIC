@@ -1,8 +1,5 @@
 
-from ast import pattern
-from msilib import type_key
 import re
-from xml.etree.ElementTree import Comment
 
 definition_keywords = [
     'CON', # constant
@@ -43,12 +40,12 @@ io_keywords = [
 
 control_keywords = [
     'BRANCH',
-    'IF', 'THEN', 'ELSE', 'ENDIF',
+    'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF',
     'GOTO', # jump
     'GOSUB', # call
     'ON', # used with goto/gosub, a lot like branch
     'RETURN', # return
-    'SELECT', 'CASE',
+    'SELECT', 'CASE', 'ENDSELECT'
     'STOP', # end program (jp $?)
     'DO', 'LOOP',
     'EXIT', # break
@@ -69,10 +66,10 @@ type_keywords = [
 access_keywords = [
     'HIGHBYTE',
     'LOWBYTE',
-    'LOWNIB',
     'HIGHNIB',
-    'LOWBIT',
+    'LOWNIB',
     'HIGHBIT',
+    'LOWBIT',
 ]
 
 access_keywords += [ 'BIT{}'.format(i) for i in range(1, 17) ]
